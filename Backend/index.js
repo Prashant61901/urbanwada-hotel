@@ -8,131 +8,128 @@ const port = 5000;
 
 // Middleware
 app.use(bodyParser.json());
-app.use(cors()); // Enable CORS
+app.use(cors());
 
-// Azure SQL Database connection configuration
+// SQL Server connection configuration
 const dbConfig = {
-  user: 'urbanwada', // Replace with your SQL Server username
-  password: 'Admin@1845', // Replace with your SQL Server password
-  server: 'urbanwada.database.windows.net', // Replace with your server name
-  database: 'urbanwada', // Replace with your database name
+  user: 'urbanwada',
+  password: 'Admin@1845',
+  server: 'urbanwada.database.windows.net',
+  database: 'urbanwada',
   options: {
-    encrypt: true, // Use encryption
+    encrypt: true,
+    trustServerCertificate: false
   }
 };
 
 // Connect to the database
-sql.connect(dbConfig).then(pool => {
-  if (pool.connected) {
-    console.log('Connected to Azure SQL Database');
+const poolPromise = sql.connect(dbConfig);
+
+app.post('/api/reviews', async (req, res) => {
+  try {
+    const { name, mobile, address, dob, anniversary, feedback } = req.body;
+
+    // Validate input data
+    if (!name || !mobile || !address || !dob || !feedback) {
+      return res.status(400).send('Missing required fields');
+    }
+
+    // Insert data into database
+    const pool = await poolPromise;
+    const query = `
+      INSERT INTO reviews (name, mobile, address, dob, anniversary, feedback)
+      VALUES (@name, @mobile, @address, @dob, @anniversary, @feedback)
+    `;
+    const request = pool.request();
+    request.input('name', sql.VarChar, name);
+    request.input('mobile', sql.VarChar, mobile);
+    request.input('address', sql.Text, address);
+    request.input('dob', sql.Date, dob);
+    request.input('anniversary', sql.Date, anniversary);
+    request.input('feedback', sql.Text, feedback);
+
+    await request.query(query);
+
+    res.status(200).send('Review saved to database');
+  } catch (err) {
+    console.error('Error saving review:', err.message);
+    res.status(500).send('Error saving review: ' + err.message);
   }
-
-  // Reviews endpoint
-  app.post('/api/reviews', async (req, res) => {
-    try {
-      const { name, mobile, address, dob, anniversary, feedback } = req.body;
-
-      // Validate input data
-      if (!name || !mobile || !address || !dob || !feedback) {
-        return res.status(400).send('Missing required fields');
-      }
-
-      const query = `
-        INSERT INTO reviews (name, mobile, address, dob, anniversary, feedback)
-        VALUES (@name, @mobile, @address, @dob, @anniversary, @feedback)
-      `;
-      const request = pool.request();
-      request.input('name', sql.VarChar, name);
-      request.input('mobile', sql.VarChar, mobile);
-      request.input('address', sql.Text, address);
-      request.input('dob', sql.Date, dob);
-      request.input('anniversary', sql.Date, anniversary);
-      request.input('feedback', sql.Text, feedback);
-
-      await request.query(query);
-      res.send('Review saved!');
-    } catch (err) {
-      console.error('SQL error:', err);
-      res.status(500).send('Error saving review');
-    }
-  });
-
-  // Get all tables endpoint
-  app.get('/api/tables', async (req, res) => {
-    try {
-      const query = 'SELECT * FROM tables'; // Adjust this query as needed
-      const result = await pool.request().query(query);
-      res.json(result.recordset);
-    } catch (err) {
-      console.error('Error fetching tables:', err);
-      res.status(500).send('Error fetching tables');
-    }
-  });
-
-  // Book a table endpoint
-  app.post('/api/book-table', async (req, res) => {
-    try {
-      const { name, mobile, date, time, tableId } = req.body;
-
-      // Validate input data
-      if (!name || !mobile || !date || !time || !tableId) {
-        return res.status(400).send('Missing required fields');
-      }
-
-      // Ensure the date and time are valid
-      const parsedDate = new Date(date);
-      const parsedTime = new Date(`1970-01-01T${time}:00Z`);
-
-      if (isNaN(parsedDate.getTime()) || isNaN(parsedTime.getTime())) {
-        return res.status(400).send('Invalid date or time');
-      }
-
-      const formattedTime = parsedTime.toISOString().substr(11, 8); // Extract time in 'HH:MM:SS'
-
-      // Check if the table is already booked at the specified date and time
-      const checkQuery = `
-        SELECT * FROM tables
-        WHERE id = @tableId AND booked = 1 AND date = @date AND time = @time
-      `;
-      const checkRequest = pool.request();
-      checkRequest.input('tableId', sql.Int, tableId);
-      checkRequest.input('date', sql.Date, date);
-      checkRequest.input('time', sql.Time, formattedTime);
-
-      const checkResult = await checkRequest.query(checkQuery);
-
-      if (checkResult.recordset.length > 0) {
-        return res.status(400).send('Table is already booked at this time.');
-      }
-
-      // Update table booking
-      const query = `
-        UPDATE tables
-        SET booked = 1, name = @name, mobile = @mobile, date = @date, time = @time
-        WHERE id = @tableId
-      `;
-      const request = pool.request();
-      request.input('name', sql.VarChar, name);
-      request.input('mobile', sql.VarChar, mobile);
-      request.input('date', sql.Date, date);
-      request.input('time', sql.Time, formattedTime);
-      request.input('tableId', sql.Int, tableId);
-
-      await request.query(query);
-
-      // Refresh table data
-      const updatedTables = await pool.request().query('SELECT * FROM tables');
-      res.json(updatedTables.recordset);
-    } catch (err) {
-      console.error('SQL error:', err);
-      res.status(500).send('Error booking table');
-    }
-  });
-
-}).catch(err => {
-  console.error('Database connection failed:', err);
+});
+// Fetch all tables
+app.get('/api/tables', async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const result = await pool.request().query('SELECT * FROM tableshow');
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Error fetching tables:', err.message);
+    res.status(500).send('Error fetching tables: ' + err.message);
+  }
 });
 
+// Book a table
+app.post('/api/book-table', async (req, res) => {
+  const { name, mobile, tableId } = req.body;
+
+  try {
+    const pool = await poolPromise;
+
+    // Update table status to booked and save customer info
+    await pool.request()
+      .input('name', sql.NVarChar, name)
+      .input('mobile', sql.NVarChar, mobile)
+      .input('tableId', sql.Int, tableId)
+      .query(`
+        UPDATE tableshow
+        SET Status = 'Booked', CustomerName = @name, CustomerMobile = @mobile
+        WHERE TableID = @tableId
+      `);
+
+    // Insert booking record
+    await pool.request()
+      .input('tableId', sql.Int, tableId)
+      .input('name', sql.NVarChar, name)
+      .input('mobile', sql.NVarChar, mobile)
+      .query(`
+        INSERT INTO Bookings (TableID, CustomerName, CustomerMobile)
+        VALUES (@tableId, @name, @mobile)
+      `);
+
+    res.status(200).send('Table booked successfully');
+  } catch (err) {
+    console.error('Error booking table:', err.message);
+    res.status(500).send('Error booking table: ' + err.message);
+  }
+});
+
+// Exit a booking and update table status to available
+app.post('/api/exit-booking/:tableId', async (req, res) => {
+  const { tableId } = req.params;
+
+  try {
+    const pool = await poolPromise;
+
+    // Delete booking from the database
+    await pool.request()
+      .input('tableId', sql.Int, tableId)
+      .query('DELETE FROM Bookings WHERE TableID = @tableId');
+
+    // Update table status to available
+    await pool.request()
+      .input('tableId', sql.Int, tableId)
+      .query('UPDATE tableshow SET Status = \'Available\', CustomerName = NULL, CustomerMobile = NULL WHERE TableID = @tableId');
+
+    res.status(200).send('Booking exited and table status updated to available');
+  } catch (err) {
+    console.error('Error exiting booking:', err.message);
+    res.status(500).send('Error exiting booking: ' + err.message);
+  }
+});
+
+// Start server
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  console.log(`Server running at http://localhost:${port}`);
 });
+
+
